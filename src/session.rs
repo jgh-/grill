@@ -64,6 +64,9 @@ impl Session {
         // Start the process
         let process_input_tx = process_manager.start(output_tx.clone(), cli_handler_clone)?;
         
+        // Clone the process input sender for the command processing task
+        let process_input_tx_for_commands = process_input_tx.clone();
+        
         // Store the process manager and CLI handler
         self.process_manager = Some(process_manager);
         self.cli_handler = Some(cli_handler.clone());
@@ -110,12 +113,18 @@ impl Session {
         let current_task = task_name.clone();
         let output_tx_clone = output_tx.clone();
         let running_clone = Arc::clone(&self.running);
+        let process_input_tx_clone = process_input_tx_for_commands;
         
         // Clone the handler for the command processing task
         let cli_handler_for_commands = cli_handler.clone();
         
         // Process commands
         tokio::spawn(async move {
+            // Helper function to send carriage return to restore CLI prompt
+            async fn send_prompt_restore(input_tx: &tokio::sync::mpsc::Sender<String>) {
+                let _ = input_tx.send("\r".to_string()).await;
+            }
+            
             // Process commands
             while let Ok(command) = command_rx.recv().await {
                 eprintln!("Processing command: {:?}", command);
@@ -164,10 +173,16 @@ impl Session {
                                     let _ = output_tx_clone.send(format!("\nError listing tasks: {}\n", e)).await;
                                 }
                             }
+                            
+                            // Send a carriage return to the CLI to get the prompt back
+                            send_prompt_restore(&process_input_tx_clone).await;
                         },
                         Command::CurrentTask => {
                             // Show current task
                             let _ = output_tx_clone.send(format!("\nCurrent task: {}\n\n", current_task)).await;
+                            
+                            // Send a carriage return to the CLI to get the prompt back
+                            send_prompt_restore(&process_input_tx_clone).await;
                         },
                         Command::SwitchTask(task_name) => {
                             // Switch to a different task
@@ -180,6 +195,9 @@ impl Session {
                                     let _ = output_tx_clone.send(format!("\nError switching to task '{}': {}\n\n", task_name, e)).await;
                                 }
                             }
+                            
+                            // Send a carriage return to the CLI to get the prompt back
+                            send_prompt_restore(&process_input_tx_clone).await;
                         },
                         Command::CreateTask(task_name) => {
                             // Create a new task
@@ -191,6 +209,9 @@ impl Session {
                                     let _ = output_tx_clone.send(format!("\nError creating task '{}': {}\n\n", task_name, e)).await;
                                 }
                             }
+                            
+                            // Send a carriage return to the CLI to get the prompt back
+                            send_prompt_restore(&process_input_tx_clone).await;
                         },
                         Command::DeleteTask(task_name) => {
                             // Delete a task
@@ -202,6 +223,9 @@ impl Session {
                                     let _ = output_tx_clone.send(format!("\nError deleting task '{}': {}\n\n", task_name, e)).await;
                                 }
                             }
+                            
+                            // Send a carriage return to the CLI to get the prompt back
+                            send_prompt_restore(&process_input_tx_clone).await;
                         },
                         Command::Help => {
                             // Show help
@@ -211,6 +235,9 @@ impl Session {
                             help_text.push_str(&cli_handler_for_commands.get_help_text());
                             
                             let _ = output_tx_clone.send(help_text).await;
+                            
+                            // Send a carriage return to the CLI to get the prompt back
+                            send_prompt_restore(&process_input_tx_clone).await;
                         },
                     }
                 }

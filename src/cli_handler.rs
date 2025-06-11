@@ -1,5 +1,5 @@
 use anyhow::Result;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::mpsc;
 use crate::io::Command;
 
 /// Concrete CLI handler type
@@ -54,12 +54,6 @@ impl CliHandler {
             CliHandler::Q(handler) => handler.intercept_output(output),
         }
     }
-    
-    pub fn write_to_cli(&self, data: String, input_tx: &broadcast::Sender<String>) -> Result<()> {
-        match self {
-            CliHandler::Q(handler) => handler.write_to_cli(data, input_tx),
-        }
-    }
 }
 
 /// Handler for Amazon Q CLI
@@ -106,22 +100,15 @@ impl QCliHandler {
     }
     
     fn intercept_input(&self, input: String) -> Result<Option<String>> {
-        // Example: We could modify input to Amazon Q here
-        // For now, just pass through
+        // For character-by-character input, just pass through
+        // No need for complex echo filtering
         Ok(Some(input))
     }
     
     fn intercept_output(&self, output: String) -> Result<Option<String>> {
-        // Example: We could modify output from Amazon Q here
-        // For now, just pass through
+        // For character-by-character input, just pass through all output
+        // The PTY will handle echo naturally
         Ok(Some(output))
-    }
-    
-    fn write_to_cli(&self, data: String, input_tx: &broadcast::Sender<String>) -> Result<()> {
-        // Example: We could add special handling for writing to Amazon Q
-        // For now, use the default implementation
-        input_tx.send(data)?;
-        Ok(())
     }
 }
 

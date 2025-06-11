@@ -155,17 +155,14 @@ impl ProcessManager {
                     Some(input) => {
                         // Get a lock on the writer
                         if let Ok(mut writer) = writer_mutex.lock() {
-                            // Ensure the input ends with proper CR+LF sequence
-                            let mut normalized_input = input.trim_end().to_string();
-                            normalized_input.push_str("\r\n");
-                            
-                            // Write the input to the process
-                            if let Err(e) = writer.write_all(normalized_input.as_bytes()) {
+                            // Write the input character/string directly to the process
+                            // For character-by-character input, don't modify the input
+                            if let Err(e) = writer.write_all(input.as_bytes()) {
                                 eprintln!("Failed to write to pty: {}", e);
                                 continue;
                             }
                             
-                            // Flush the writer to ensure the input is sent
+                            // Flush the writer to ensure the input is sent immediately
                             if let Err(e) = writer.flush() {
                                 eprintln!("Failed to flush pty writer: {}", e);
                                 continue;
@@ -210,25 +207,6 @@ impl ProcessManager {
         Ok(())
     }
     
-    /// Check if the process is running
-    pub fn is_running(&self) -> bool {
-        *self.running.lock().unwrap()
-    }
-    
-    /// Resize the PTY
-    pub fn resize(&mut self, rows: u16, cols: u16) -> Result<()> {
-        if let Some(pair) = &mut self.pty_pair {
-            pair.master.resize(PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            })?;
-            Ok(())
-        } else {
-            Err(anyhow::anyhow!("Process not started"))
-        }
-    }
 }
 
 impl Drop for ProcessManager {

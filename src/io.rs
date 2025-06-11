@@ -1,8 +1,12 @@
 use anyhow::Result;
-use std::io::{self, Write, BufRead};
+use std::io::{self, Write};
 use tokio::sync::{mpsc, broadcast};
 use std::thread;
 use std::sync::{Arc, Mutex};
+use crossterm::{
+    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
+    terminal::{disable_raw_mode, enable_raw_mode},
+};
 
 /// Handles input/output between the user and the child process
 pub struct IoHandler {
@@ -51,79 +55,123 @@ impl IoHandler {
     
     /// Start the IO handler
     pub async fn start(&mut self) -> Result<()> {
-        // Set up stdin reader
+        // Enable raw mode for character-by-character input
+        enable_raw_mode()?;
+        
+        // Set up stdin reader for character-by-character input
         let input_tx = self.input_tx.clone();
         let command_tx = self.command_tx.clone();
         let running = Arc::clone(&self.running);
         
-        thread::spawn(move || -> io::Result<()> {
-            let stdin = io::stdin();
-            let mut reader = stdin.lock();
-            let mut buffer = String::new();
+        thread::spawn(move || -> Result<()> {
+            let mut command_buffer = String::new();
+            let mut in_command_mode = false;
             
             while *running.lock().unwrap() {
-                buffer.clear();
-                match reader.read_line(&mut buffer) {
-                    Ok(0) => {
-                        break; // EOF
-                    },
-                    Ok(_) => {
-                        // Check for special commands
-                        if buffer.starts_with("/task") {
-                            let parts: Vec<&str> = buffer.trim().split_whitespace().collect();
+                // Check for keyboard events
+                if event::poll(std::time::Duration::from_millis(100))? {
+                    if let Event::Key(key_event) = event::read()? {
+                        match key_event {
+                            // Handle Ctrl+C to quit
+                            KeyEvent {
+                                code: KeyCode::Char('c'),
+                                modifiers: KeyModifiers::CONTROL,
+                                ..
+                            } => {
+                                if let Err(e) = command_tx.send(Command::Quit) {
+                                    eprintln!("Failed to send quit command: {}", e);
+                                }
+                                break;
+                            }
                             
-                            match parts.get(1) {
-                                Some(&"init") if parts.len() > 2 => {
-                                    let task_name = parts[2];
-                                    if let Err(e) = command_tx.send(Command::CreateTask(task_name.to_string())) {
-                                        eprintln!("Failed to send command: {}", e);
+                            // Handle Enter key
+                            KeyEvent {
+                                code: KeyCode::Enter,
+                                ..
+                            } => {
+                                if in_command_mode {
+                                    // Process the command and show a newline
+                                    println!();
+                                    Self::process_command_buffer(&command_buffer, &command_tx);
+                                    command_buffer.clear();
+                                    in_command_mode = false;
+                                } else {
+                                    // Send carriage return to the process
+                                    if let Err(e) = input_tx.send("\r".to_string()) {
+                                        eprintln!("Failed to send input: {}", e);
                                     }
-                                },
-                                Some(&"delete") if parts.len() > 2 => {
-                                    let task_name = parts[2];
-                                    if let Err(e) = command_tx.send(Command::DeleteTask(task_name.to_string())) {
-                                        eprintln!("Failed to send command: {}", e);
-                                    }
-                                },
-                                Some(&"list") => {
-                                    if let Err(e) = command_tx.send(Command::ListTasks) {
-                                        eprintln!("Failed to send command: {}", e);
-                                    }
-                                },
-                                Some(task_name) => {
-                                    if let Err(e) = command_tx.send(Command::SwitchTask(task_name.to_string())) {
-                                        eprintln!("Failed to send command: {}", e);
-                                    }
-                                },
-                                None => {
-                                    if let Err(e) = command_tx.send(Command::CurrentTask) {
-                                        eprintln!("Failed to send command: {}", e);
-                                    }
-                                },
+                                }
                             }
-                        } else if buffer.trim() == "/quit" {
-                            if let Err(e) = command_tx.send(Command::Quit) {
-                                eprintln!("Failed to send command: {}", e);
+                            
+                            // Handle regular characters
+                            KeyEvent {
+                                code: KeyCode::Char(c),
+                                modifiers: KeyModifiers::NONE,
+                                ..
+                            } => {
+                                if c == '/' && !in_command_mode && command_buffer.is_empty() {
+                                    // Start command mode
+                                    in_command_mode = true;
+                                    command_buffer.push(c);
+                                    // Show the slash character
+                                    print!("{}", c);
+                                    io::stdout().flush().unwrap();
+                                } else if in_command_mode {
+                                    // Add to command buffer and show character
+                                    command_buffer.push(c);
+                                    print!("{}", c);
+                                    io::stdout().flush().unwrap();
+                                } else {
+                                    // Send character to process
+                                    if let Err(e) = input_tx.send(c.to_string()) {
+                                        eprintln!("Failed to send input: {}", e);
+                                    }
+                                }
                             }
-                            break;
-                        } else if buffer.trim() == "/help" {
-                            if let Err(e) = command_tx.send(Command::Help) {
-                                eprintln!("Failed to send command: {}", e);
+                            
+                            // Handle backspace
+                            KeyEvent {
+                                code: KeyCode::Backspace,
+                                ..
+                            } => {
+                                if in_command_mode {
+                                    if command_buffer.pop().is_some() {
+                                        // Show backspace visually
+                                        print!("\x08 \x08");
+                                        io::stdout().flush().unwrap();
+                                    }
+                                    if command_buffer.is_empty() {
+                                        in_command_mode = false;
+                                    }
+                                } else {
+                                    // Send backspace to process
+                                    if let Err(e) = input_tx.send("\x08".to_string()) {
+                                        eprintln!("Failed to send backspace: {}", e);
+                                    }
+                                }
                             }
-                        } else {
-                            // Forward input to the child process
-                            if let Err(e) = input_tx.send(buffer.clone()) {
-                                eprintln!("Failed to send input: {}", e);
+                            
+                            // Handle other special keys
+                            KeyEvent {
+                                code: KeyCode::Tab,
+                                ..
+                            } => {
+                                if !in_command_mode {
+                                    if let Err(e) = input_tx.send("\t".to_string()) {
+                                        eprintln!("Failed to send tab: {}", e);
+                                    }
+                                }
                             }
+                            
+                            // Ignore other keys for now
+                            _ => {}
                         }
-                    },
-                    Err(e) => {
-                        eprintln!("Error reading from stdin: {}", e);
-                        break;
                     }
                 }
             }
             
+            // Disable raw mode when exiting
+            let _ = disable_raw_mode();
             Ok(())
         });
         
@@ -132,11 +180,80 @@ impl IoHandler {
         
         // Process output directly
         while let Some(output) = self.output_rx.recv().await {
+            // In raw mode, we need to convert \n to \r\n for proper display
+            let formatted_output = output.replace('\n', "\r\n");
+            
             // Write to stdout
-            stdout.write_all(output.as_bytes())?;
+            stdout.write_all(formatted_output.as_bytes())?;
             stdout.flush()?;
         }
         
+        // Ensure raw mode is disabled
+        let _ = disable_raw_mode();
+        
         Ok(())
+    }
+    
+    /// Process command buffer and send appropriate command
+    fn process_command_buffer(buffer: &str, command_tx: &broadcast::Sender<Command>) {
+        let parts: Vec<&str> = buffer.trim().split_whitespace().collect();
+        
+        if parts.is_empty() {
+            return;
+        }
+        
+        match parts[0] {
+            "/task" => {
+                match parts.get(1) {
+                    Some(&"init") if parts.len() > 2 => {
+                        let task_name = parts[2];
+                        if let Err(e) = command_tx.send(Command::CreateTask(task_name.to_string())) {
+                            eprintln!("Failed to send command: {}", e);
+                        }
+                    },
+                    Some(&"delete") if parts.len() > 2 => {
+                        let task_name = parts[2];
+                        if let Err(e) = command_tx.send(Command::DeleteTask(task_name.to_string())) {
+                            eprintln!("Failed to send command: {}", e);
+                        }
+                    },
+                    Some(&"list") => {
+                        if let Err(e) = command_tx.send(Command::ListTasks) {
+                            eprintln!("Failed to send command: {}", e);
+                        }
+                    },
+                    Some(task_name) => {
+                        if let Err(e) = command_tx.send(Command::SwitchTask(task_name.to_string())) {
+                            eprintln!("Failed to send command: {}", e);
+                        }
+                    },
+                    None => {
+                        if let Err(e) = command_tx.send(Command::CurrentTask) {
+                            eprintln!("Failed to send command: {}", e);
+                        }
+                    },
+                }
+            },
+            "/quit" => {
+                if let Err(e) = command_tx.send(Command::Quit) {
+                    eprintln!("Failed to send command: {}", e);
+                }
+            },
+            "/help" => {
+                if let Err(e) = command_tx.send(Command::Help) {
+                    eprintln!("Failed to send command: {}", e);
+                }
+            },
+            _ => {
+                // Unknown command, ignore
+            }
+        }
+    }
+}
+
+impl Drop for IoHandler {
+    fn drop(&mut self) {
+        // Ensure raw mode is disabled when the handler is dropped
+        let _ = disable_raw_mode();
     }
 }
