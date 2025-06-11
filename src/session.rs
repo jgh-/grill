@@ -228,16 +228,16 @@ impl Session {
                             send_prompt_restore(&process_input_tx_clone).await;
                         },
                         Command::Help => {
-                            // Show help
+                            // Show grill help first
                             let mut help_text = get_help_text();
                             
-                            // Add CLI-specific help
+                            // Add CLI-specific help placeholder
                             help_text.push_str(&cli_handler_for_commands.get_help_text());
                             
                             let _ = output_tx_clone.send(help_text).await;
                             
-                            // Send a carriage return to the CLI to get the prompt back
-                            send_prompt_restore(&process_input_tx_clone).await;
+                            // Now send /help to the Q CLI to show its native help
+                            let _ = process_input_tx_clone.send("/help\r".to_string()).await;
                         },
                     }
                 }

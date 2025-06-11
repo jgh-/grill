@@ -92,7 +92,7 @@ impl IoHandler {
                                 if in_command_mode {
                                     // Process the command and show a newline
                                     println!();
-                                    Self::process_command_buffer(&command_buffer, &command_tx);
+                                    Self::process_command_buffer(&command_buffer, &command_tx, &input_tx);
                                     command_buffer.clear();
                                     in_command_mode = false;
                                 } else {
@@ -195,7 +195,11 @@ impl IoHandler {
     }
     
     /// Process command buffer and send appropriate command
-    fn process_command_buffer(buffer: &str, command_tx: &broadcast::Sender<Command>) {
+    fn process_command_buffer(
+        buffer: &str, 
+        command_tx: &broadcast::Sender<Command>,
+        input_tx: &broadcast::Sender<String>
+    ) {
         let parts: Vec<&str> = buffer.trim().split_whitespace().collect();
         
         if parts.is_empty() {
@@ -245,7 +249,11 @@ impl IoHandler {
                 }
             },
             _ => {
-                // Unknown command, ignore
+                // Unknown command - pass it through to the underlying CLI
+                let full_command = format!("{}\r", buffer);
+                if let Err(e) = input_tx.send(full_command) {
+                    eprintln!("Failed to send command to CLI: {}", e);
+                }
             }
         }
     }

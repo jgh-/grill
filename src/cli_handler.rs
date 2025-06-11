@@ -85,7 +85,7 @@ impl QCliHandler {
     
     fn get_help_text(&self) -> String {
         // Q-specific help text
-        String::from("\nAmazon Q Commands:\n  (No Q-specific commands available yet)\n")
+        String::from("\nQ CLI Help (below):\n")
     }
     
     fn on_start(
