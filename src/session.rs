@@ -185,11 +185,55 @@ impl Session {
                             send_prompt_restore(&process_input_tx_clone).await;
                         },
                         Command::SwitchTask(task_name) => {
-                            // Switch to a different task
-                            match environment.set_current_task(&task_name) {
-                                Ok(_) => {
-                                    let _ = output_tx_clone.send(format!("\nSwitched to task: {}\n", task_name)).await;
-                                    let _ = output_tx_clone.send("Please restart grill to apply the change.\n\n".to_string()).await;
+                            // Check if the task exists first
+                            match environment.get_task_dir(&task_name) {
+                                Ok(task_dir) => {
+                                    // Get the CLI command for the new task
+                                    let new_cli_command = match Self::get_cli_command_for_task(&environment, &task_name) {
+                                        Ok(cmd) => cmd,
+                                        Err(e) => {
+                                            let _ = output_tx_clone.send(format!("\nError getting CLI command for task '{}': {}\n\n", task_name, e)).await;
+                                            send_prompt_restore(&process_input_tx_clone).await;
+                                            continue;
+                                        }
+                                    };
+                                    
+                                    // Check if the new task uses the same CLI as the current task
+                                    if cli_handler_for_commands.can_handle_command(&new_cli_command) {
+                                        // Same CLI - we can switch seamlessly
+                                        let _ = output_tx_clone.send(format!("\nSwitching to task: {} (seamless switch)\n", task_name)).await;
+                                        
+                                        // Clear context and switch task
+                                        match cli_handler_for_commands.clear_context_and_switch_task(
+                                            &task_name,
+                                            &task_dir,
+                                            &process_input_tx_clone,
+                                            &output_tx_clone,
+                                        ).await {
+                                            Ok(_) => {
+                                                // Update the current task in the environment
+                                                if let Err(e) = environment.set_current_task(&task_name) {
+                                                    let _ = output_tx_clone.send(format!("Warning: Failed to update current task file: {}\n", e)).await;
+                                                }
+                                                // Note: We don't update current_task variable here since it's used for display only
+                                                // The actual task switching is handled by the CLI context clearing
+                                            },
+                                            Err(e) => {
+                                                let _ = output_tx_clone.send(format!("Error switching task context: {}\n\n", e)).await;
+                                            }
+                                        }
+                                    } else {
+                                        // Different CLI - requires restart
+                                        match environment.set_current_task(&task_name) {
+                                            Ok(_) => {
+                                                let _ = output_tx_clone.send(format!("\nSwitched to task: {}\n", task_name)).await;
+                                                let _ = output_tx_clone.send("Task uses a different CLI. Please restart grill to apply the change.\n\n".to_string()).await;
+                                            },
+                                            Err(e) => {
+                                                let _ = output_tx_clone.send(format!("\nError switching to task '{}': {}\n\n", task_name, e)).await;
+                                            }
+                                        }
+                                    }
                                 },
                                 Err(e) => {
                                     let _ = output_tx_clone.send(format!("\nError switching to task '{}': {}\n\n", task_name, e)).await;
@@ -269,6 +313,25 @@ impl Session {
         
         // Fall back to global config
         let config_path = self.environment.get_config_path();
+        let config = Config::load(&config_path)?;
+        Ok(config.get_default_cli().to_string())
+    }
+    
+    /// Get the CLI command for a task (static version for use in async contexts)
+    fn get_cli_command_for_task(environment: &Environment, task_name: &str) -> Result<String> {
+        // Try to load task-specific config
+        let task_dir = environment.get_task_dir(task_name)?;
+        let config_path = task_dir.join("config.toml");
+        
+        if config_path.exists() {
+            let task_config = crate::config::TaskConfig::load(&config_path)?;
+            if let Some(cli) = task_config.get_cli() {
+                return Ok(cli.to_string());
+            }
+        }
+        
+        // Fall back to global config
+        let config_path = environment.get_config_path();
         let config = Config::load(&config_path)?;
         Ok(config.get_default_cli().to_string())
     }

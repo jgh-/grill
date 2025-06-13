@@ -121,7 +121,6 @@ q = "q chat"
     // The following methods are kept for future use but marked as allow(dead_code)
     
     /// Set the current task
-    #[allow(dead_code)]
     pub fn set_current_task(&self, name: &str) -> Result<()> {
         let task_dir = self.tasks_dir.join(name);
         
@@ -136,7 +135,6 @@ q = "q chat"
     }
     
     /// List all tasks
-    #[allow(dead_code)]
     pub fn list_tasks(&self) -> Result<Vec<String>> {
         let mut tasks = Vec::new();
         
@@ -157,7 +155,6 @@ q = "q chat"
     }
     
     /// Delete a task
-    #[allow(dead_code)]
     pub fn delete_task(&self, name: &str) -> Result<()> {
         let task_dir = self.tasks_dir.join(name);
         
